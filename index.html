@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>顏色判斷射擊遊戲</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a202c;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            touch-action: none; /* 防止手機瀏覽器滑動重整 */
+        }
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            height: 100vh;
+            max-height: 800px;
+            background-color: #2d3748;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        #score-display {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            pointer-events: none;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        .screen {
+            background-color: rgba(0, 0, 0, 0.8);
+            padding: 2rem;
+            border-radius: 1rem;
+            text-align: center;
+            pointer-events: auto;
+            backdrop-filter: blur(5px);
+        }
+        .btn {
+            padding: 12px 24px;
+            font-size: 1.25rem;
+            font-weight: bold;
+            background-color: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            margin-top: 1rem;
+        }
+        .btn:hover {
+            background-color: #38a169;
+        }
+        .btn:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="score-display" class="hidden">分數: <span id="score">0</span></div>
+    
+    <div id="ui-layer">
+        <!-- 開始畫面 -->
+        <div id="start-screen" class="screen">
+            <h1 class="text-3xl font-bold mb-4 text-blue-300">顏色判斷射擊</h1>
+            <div class="text-left mb-6 space-y-2 text-gray-200">
+                <p>🎯 <b>規則說明：</b></p>
+                <p class="flex items-center"><span class="w-4 h-4 bg-red-500 inline-block rounded-full mr-2"></span> 擊中紅色敵人：分數 +1</p>
+                <p class="flex items-center"><span class="w-4 h-4 bg-blue-500 inline-block rounded-full mr-2"></span> 擊中藍色敵人：分數 -1</p>
+                <p>🏆 目標：分數大於 9 分 (達到10分)</p>
+                <p class="text-sm text-gray-400 mt-2">操作方式：滑鼠移動/觸控滑動來瞄準，點擊/點觸螢幕發射子彈。</p>
+            </div>
+            <button id="start-btn" class="btn w-full">開始遊戲</button>
+        </div>
+
+        <!-- 過關畫面 -->
+        <div id="win-screen" class="screen hidden">
+            <h1 class="text-4xl font-bold text-yellow-400 mb-2">太棒了，過關！</h1>
+            <p class="text-xl mb-6">你成功達到了 10 分！</p>
+            <button id="restart-btn" class="btn w-full">再玩一次</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const uiLayer = document.getElementById('ui-layer');
+    const startScreen = document.getElementById('start-screen');
+    const winScreen = document.getElementById('win-screen');
+    const scoreDisplayContainer = document.getElementById('score-display');
+    const scoreElement = document.getElementById('score');
+    const startBtn = document.getElementById('start-btn');
+    const restartBtn = document.getElementById('restart-btn');
+
+    // 遊戲狀態
+    let gameState = 'start'; // 'start', 'playing', 'win'
+    let score = 0;
+    let animationId;
+    let lastEnemySpawnTime = 0;
+
+    // 遊戲實體陣列
+    let enemies = [];
+    let bullets = [];
+    let particles = []; // 爆炸粒子效果
+
+    // 玩家設定
+    const player = {
+        x: 0,
+        y: 0,
+        width: 40,
+        height: 30,
+        color: '#4fd1c5' // 青綠色
+    };
+
+    // 調整畫布大小
+    function resizeCanvas() {
+        const container = document.getElementById('game-container');
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        player.x = canvas.width / 2;
+        player.y = canvas.height - 50;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // 類別：子彈
+    class Bullet {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            this.radius = 5;
+            this.speed = 10;
+            this.active = true;
+            this.color = '#fbd38d'; // 黃色子彈
+        }
+
+        update() {
+            this.y -= this.speed;
+            if (this.y < 0) this.active = false;
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 發光效果
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = this.color;
+            ctx.fill();
+            ctx.shadowBlur = 0; // 重置
+        }
+    }
+
+    // 類別：敵人 (依據流程圖隨機產生紅或藍)
+    class Enemy {
+        constructor() {
+            this.radius = 20 + Math.random() * 10;
+            this.x = Math.random() * (canvas.width - this.radius * 2) + this.radius;
+            this.y = -this.radius;
+            this.speed = 1.5 + Math.random() * 2;
+            this.active = true;
+            
+            // 隨機決定顏色：紅色或藍色
+            this.type = Math.random() < 0.5 ? 'red' : 'blue';
+            this.color = this.type === 'red' ? '#fc8181' : '#63b3ed'; 
+        }
+
+        update() {
+            this.y += this.speed;
+            if (this.y > canvas.height + this.radius) {
+                this.active = false;
+            }
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 敵人外框
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+    }
+
+    // 類別：爆炸粒子
+    class Particle {
+        constructor(x, y, color) {
+            this.x = x;
+            this.y = y;
+            this.radius = Math.random() * 4 + 1;
+            this.color = color;
+            this.velocity = {
+                x: (Math.random() - 0.5) * 8,
+                y: (Math.random() - 0.5) * 8
+            };
+            this.life = 1.0;
+            this.decay = Math.random() * 0.05 + 0.02;
+        }
+        
+        update() {
+            this.x += this.velocity.x;
+            this.y += this.velocity.y;
+            this.life -= this.decay;
+        }
+        
+        draw() {
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, this.life);
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    // 產生爆炸效果
+    function createExplosion(x, y, color) {
+        for (let i = 0; i < 15; i++) {
+            particles.push(new Particle(x, y, color));
+        }
+    }
+
+    // 輸入處理 (滑鼠與觸控)
+    function handleMove(e) {
+        if (gameState !== 'playing') return;
+        
+        let clientX;
+        if (e.type === 'touchmove') {
+            clientX = e.touches[0].clientX;
+            e.preventDefault(); // 防止滾動
+        } else {
+            clientX = e.clientX;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+        player.x = clientX - rect.left;
+        
+        // 限制玩家在畫面內
+        if (player.x < player.width / 2) player.x = player.width / 2;
+        if (player.x > canvas.width - player.width / 2) player.x = canvas.width - player.width / 2;
+    }
+
+    function handleShoot(e) {
+        if (gameState !== 'playing') return;
+        if (e.type === 'touchstart') e.preventDefault();
+        
+        // 玩家射擊 (流程圖: 玩家射擊? -> 是)
+        bullets.push(new Bullet(player.x, player.y - player.height / 2));
+    }
+
+    canvas.addEventListener('mousemove', handleMove);
+    canvas.addEventListener('touchmove', handleMove, { passive: false });
+    
+    canvas.addEventListener('mousedown', handleShoot);
+    canvas.addEventListener('touchstart', handleShoot, { passive: false });
+
+    // 碰撞偵測 (圓形與圓形)
+    function checkCollision(circle1, circle2) {
+        const dx = circle1.x - circle2.x;
+        const dy = circle1.y - circle2.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < circle1.radius + circle2.radius;
+    }
+
+    // 遊戲主迴圈
+    function update() {
+        if (gameState !== 'playing') return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 隨機產生敵人 (流程圖: 隨機產生紅色或藍色敵人)
+        const now = Date.now();
+        if (now - lastEnemySpawnTime > 800) { // 每 0.8 秒產生一個
+            enemies.push(new Enemy());
+            lastEnemySpawnTime = now;
+        }
+
+        // 畫玩家 (簡單的三角形砲台)
+        ctx.fillStyle = player.color;
+        ctx.beginPath();
+        ctx.moveTo(player.x, player.y - player.height / 2);
+        ctx.lineTo(player.x - player.width / 2, player.y + player.height / 2);
+        ctx.lineTo(player.x + player.width / 2, player.y + player.height / 2);
+        ctx.closePath();
+        ctx.fill();
+
+        // 更新與繪製子彈
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            const b = bullets[i];
+            b.update();
+            b.draw();
+            if (!b.active) bullets.splice(i, 1);
+        }
+
+        // 更新與繪製粒子
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.update();
+            p.draw();
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+
+        // 更新與繪製敵人，並檢查碰撞 (流程圖核心邏輯)
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const enemy = enemies[i];
+            enemy.update();
+            enemy.draw();
+
+            // 檢查子彈是否擊中敵人
+            for (let j = bullets.length - 1; j >= 0; j--) {
+                const bullet = bullets[j];
+                
+                if (checkCollision(enemy, bullet)) { // 流程圖: 子彈是否擊中敵人? -> 是
+                    enemy.active = false;
+                    bullet.active = false;
+                    
+                    createExplosion(enemy.x, enemy.y, enemy.color);
+
+                    // 流程圖: 檢查敵人顏色
+                    if (enemy.type === 'red') {
+                        // 擊中紅色敵人: 分數 + 1
+                        score += 1;
+                    } else if (enemy.type === 'blue') {
+                        // 擊中藍色敵人: 分數 - 1
+                        score -= 1;
+                    }
+                    
+                    // 更新分數顯示
+                    scoreElement.innerText = score;
+                    
+                    // 特效：分數變更時閃爍
+                    scoreElement.style.color = enemy.type === 'red' ? '#48bb78' : '#e53e3e';
+                    setTimeout(() => scoreElement.style.color = 'white', 300);
+
+                    // 流程圖: 分數 > 9 ?
+                    if (score > 9) { // 也就是達到10分
+                        winGame();
+                    }
+                    break;
+                }
+            }
+
+            if (!enemy.active) {
+                enemies.splice(i, 1);
+            }
+        }
+
+        animationId = requestAnimationFrame(update);
+    }
+
+    // 開始遊戲 (流程圖: 開始 -> 分數 = 0)
+    function startGame() {
+        gameState = 'playing';
+        score = 0;
+        scoreElement.innerText = score;
+        enemies = [];
+        bullets = [];
+        particles = [];
+        lastEnemySpawnTime = Date.now();
+        
+        startScreen.classList.add('hidden');
+        winScreen.classList.add('hidden');
+        uiLayer.style.pointerEvents = 'none';
+        scoreDisplayContainer.classList.remove('hidden');
+        
+        // 將玩家置中
+        player.x = canvas.width / 2;
+
+        cancelAnimationFrame(animationId);
+        update();
+    }
+
+    // 遊戲過關 (流程圖: 太棒了，過關)
+    function winGame() {
+        gameState = 'win';
+        scoreDisplayContainer.classList.add('hidden');
+        winScreen.classList.remove('hidden');
+        uiLayer.style.pointerEvents = 'auto'; // 讓按鈕可以被點擊
+    }
+
+    // 綁定按鈕事件
+    startBtn.addEventListener('click', startGame);
+    restartBtn.addEventListener('click', startGame);
+
+    // 初始畫面只畫出背景
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+</script>
+</body>
+</html>
